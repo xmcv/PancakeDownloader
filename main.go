@@ -2,43 +2,58 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
-
+	
 	"golang.org/x/net/html"
 )
 
 func main() {
-	var threadURL string
+
+	//Arguments check
+	if len(os.Args) == 1 {
+		fmt.Printf("Usage: ./main <URL>")
+		os.Exit(1)
+	}
+	
 	resp, err := http.Get(os.Args[1])
-	urlArray := make([]string, 1)
+	
+	if err != nil {
+		log.Fatal()
+	}
+	
+	var urlArray []string
 	s, _ := ioutil.ReadAll(resp.Body)
 	doc, err := html.Parse(strings.NewReader(string(s)))
-
-	threadURL = os.Args[1]
-	DirName := path.Base(threadURL)
-
+	dirName := path.Base(resp.Request.URL.Path)
+	
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Fatal()
 	}
+	
 	if resp.StatusCode == 200 {
-		makeDir(DirName)
 
+		// Creating the directory
+		if _, err := os.Stat(dirName); os.IsNotExist(err) {
+			os.Mkdir(dirName, os.FileMode(0775))
+		}
+
+		// Parsing the HTML Body, looking for pics links
 		var f func(*html.Node)
 		f = func(n *html.Node) {
 			if n.Type == html.ElementNode && n.Data == "a" {
 				for _, a := range n.Attr {
-					if a.Key == "class" {
+					if a.Key == "class" && a.Val == "fileThumb" {
 						for _, y := range n.Attr {
 							if y.Key == "href" {
-								if strings.Contains(y.Val, "i.4cdn.org") {
-									urlArray = append(urlArray, strings.Replace(y.Val, "//", "http://", 1))
-								}
+
+								// Add http:// to the link
+								urlArray = append(urlArray, strings.Replace(y.Val, "//", "http://", 1))
 							}
 						}
 					}
@@ -49,53 +64,44 @@ func main() {
 			}
 		}
 		f(doc)
-		for i := 1; i < len(urlArray); i++ {
-			fmt.Println(urlArray[i])
-			downloadFile(urlArray[i], DirName)
+
+		// Download all files
+		for i := 0; i < len(urlArray); i++ {
+			fmt.Printf("[*]Downloading %d of %d: %s\n", i, len(urlArray), urlArray[i])
+			downloadFile(urlArray[i], dirName)
 		}
+
 	}
 }
 
-func makeDir(s string) {
-	os.Mkdir(s, os.FileMode(0777))
-}
+func downloadFile(picUrl string, dir string) {
+	fileName := path.Base(picUrl)
 
-func downloadFile(picURL string, dir string) {
-	fileURL, err := url.Parse(picURL)
-
-	if err != nil {
-		fmt.Println(err.Error())
+	// Checking duals
+	if _, err := os.Stat(fmt.Sprintf("%s/%s", dir, fileName)); err == nil {
+		fmt.Printf("File already downloaded, skipping...\n")
+		return
 	}
 
-	path := fileURL.Path
-	segments := strings.Split(path, "/")
-	fileName := segments[2]
+	// Downloading files in the thread's folder [dir/fileName]
 	file, err := os.Create(fmt.Sprintf("%s/%s", dir, fileName))
 
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Fatal()
 	}
 	defer file.Close()
 
-	check := http.Client{
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			r.URL.Opaque = r.URL.Path
-			return nil
-		},
-	}
-
-	resp, err := check.Get(picURL)
+	resp, err := http.Get(picUrl)
 
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Fatal()
 	}
 	defer resp.Body.Close()
-	//fmt.Println(resp.Status)
 
 	size, err := io.Copy(file, resp.Body)
 
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Fatal()
 	}
 
 	fmt.Printf("%s with %v bytes downloaded\n", fileName, size)
